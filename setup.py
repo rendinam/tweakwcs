@@ -171,7 +171,7 @@ INSTALL_REQUIRES=[
     'stsci.stimage',
     'stsci.imagestats',
     'spherical_geometry',
-    'jwst',
+    #'jwst',
     'sphinx',
     #'sphinx-automodapi',
     #'sphinx_rtd_theme',
