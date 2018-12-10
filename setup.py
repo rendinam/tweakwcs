@@ -173,9 +173,9 @@ INSTALL_REQUIRES=[
     'spherical_geometry',
     'jwst',
     'sphinx',
-    'sphinx-automodapi',
-    'sphinx_rtd_theme',
-    'stsci_rtd_theme',
+    #'sphinx-automodapi',
+    #'sphinx_rtd_theme',
+    #'stsci_rtd_theme',
     'numpydoc',
 ]
 
