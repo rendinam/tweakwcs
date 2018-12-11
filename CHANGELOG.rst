@@ -4,9 +4,23 @@
 Release Notes
 =============
 
-..
-  tweakwcs (DEVELOPMENT)
-  ==========================
+
+tweakwcs (DEVELOPMENT)
+======================
+
+- Fixeded a bug due to which ``'fit_ref_idx'`` and ``'fit_input_idx'``
+  fields in the ``fit`` dictionary were never updated. [#31]
+
+- ``jwst`` (pipeline) package is no longer a hard dependency. [#30]
+
+- Removed unnecessary install dependencies. [#30]
+
+- Documentation improvements. [#30]
+
+- Corrected 'RA', 'DEC' units used to compute bounding polygon for the
+  reference catalog. [#30]
+
+- Updated ``C`` code to avoid ``numpy`` deprecation warnings. [#30]
 
 
 tweakwcs v0.1.0 (08-December-2018)

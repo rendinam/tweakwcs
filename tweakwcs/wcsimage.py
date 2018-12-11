@@ -1,3 +1,4 @@
+# Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
 This module provides support for working with image footprints on the sky and
 source catalogs.
@@ -18,10 +19,9 @@ import gwcs
 from astropy import table
 from spherical_geometry.polygon import SphericalPolygon
 from stsci.stimage import xyxymatch
-from jwst.transforms.tpcorr import TPCorr, rot_mat3D
 
 # LOCAL
-#from .tpcorr import TPCorr, rot_mat3D
+from .wcsutils import cartesian2spherical, spherical2cartesian, planar_rot_3D
 from .tpwcs import TPWCS
 from .matchutils import TPMatch
 from .linearfit import iter_linear_fit
@@ -391,7 +391,7 @@ class WCSImageCatalog(object):
 
         if len(x) == 0:
             # no points
-            raise RuntimeError("Unexpected error: Contact sofware developer")
+            raise RuntimeError("Unexpected error: Contact software developer")
 
         elif len(x) > 2:
             ra, dec = convex_hull(x, y, wcs=self.det_to_world)
@@ -715,13 +715,13 @@ class WCSGroupCatalog(object):
                                    length=catlen, mask=True)
             self._catalog.add_column(c)
         else:
-            self._catalog['matched_ref_id'].mask = True
-        self._catalog['matched_ref_id'][minput_idx] = \
-            self._catalog['id'][minput_idx]
+            self._catalog['matched_ref_id'].mask[:] = True
+
         self._catalog['matched_ref_id'].mask[minput_idx] = False
+        self._catalog['matched_ref_id'][minput_idx] = refcat.catalog['id'][mref_idx]
 
         # this is needed to index reference catalog directly without using
-        # astropy table indexing which at this moment is experimental:
+        # astropy table indexing which, at this moment, is experimental:
         if '_raw_matched_ref_idx' not in colnames:
             c = table.MaskedColumn(name='_raw_matched_ref_idx',
                                    dtype=int, length=catlen, mask=True)
@@ -732,6 +732,20 @@ class WCSGroupCatalog(object):
         self._catalog['_raw_matched_ref_idx'].mask[minput_idx] = False
 
         log.info("Found {:d} matches for '{}'...".format(nmatches, self.name))
+
+        # TODO: revisit this once the bug described in
+        # https://github.com/spacetelescope/stsci.stimage/issues/8
+        # is fixed.
+        #
+        # Due to this bug minput_idx may contain duplicate values.
+        # Because of this, the above logic for masking, saving ids, and indices
+        # does not work reliably. As a workaround, we save matched array
+        # indices within the image catalog so that we can use them in
+        # `fit2ref()`. For this to work, reference and image catalog must not
+        # change between this function return and `fit2ref()` call.
+        #
+        self._mref_idx = mref_idx
+        self._minput_idx = minput_idx
 
         return nmatches, mref_idx, minput_idx
 
@@ -772,13 +786,25 @@ class WCSGroupCatalog(object):
         refxy = np.asanyarray([refcat.catalog['TPx'],
                                refcat.catalog['TPy']]).T
 
-        mask = np.logical_not(self._catalog['matched_ref_id'].mask)
-        im_xyref = im_xyref[mask]
-        ref_idx = self._catalog['_raw_matched_ref_idx'][mask]
+        # mask = np.logical_not(self._catalog['matched_ref_id'].mask)
+        # im_xyref = im_xyref[mask]
+        # ref_idx = self._catalog['_raw_matched_ref_idx'][mask]
+
+        # TODO: revisit this once the bug described in
+        # https://github.com/spacetelescope/stsci.stimage/issues/8
+        # is fixed.
+        #
+        # Due to this bug minput_idx may contain duplicate values.
+        # For now we bypass the above commented code by accessing indices
+        # stored in the image's catalog.
+        minput_idx = self._minput_idx
+        im_xyref = im_xyref[minput_idx]
+        ref_idx = self._mref_idx
+
         refxy = refxy[ref_idx]
 
         fit = iter_linear_fit(
-            refxy, im_xyref, fitgeom=fitgeom,
+            refxy, im_xyref, xyindx=ref_idx, uvindx=minput_idx, fitgeom=fitgeom,
             nclip=nclip, sigma=sigma, center=(0, 0)
         )
 
@@ -1173,28 +1199,27 @@ class RefCatalog(object):
         # Compute x, y coordinates in this tangent plane based on the
         # previously computed WCS and return the set of x, y coordinates and
         # "reference WCS".
-        x, y, z = TPCorr.spherical2cartesian(
+        x, y, z = spherical2cartesian(
             self.catalog['RA'], self.catalog['DEC']
         )
-        ra_ref, dec_ref = TPCorr.cartesian2spherical(
+        ra_ref, dec_ref = cartesian2spherical(
             x.mean(dtype=np.float64),
             y.mean(dtype=np.float64),
             z.mean(dtype=np.float64)
         )
-        rotm = [rot_mat3D(np.deg2rad(alpha), 2 - axis)
+        rotm = [planar_rot_3D(np.deg2rad(alpha), 2 - axis)
                 for axis, alpha in enumerate([ra_ref, dec_ref])]
         euler_rot = np.linalg.multi_dot(rotm)
         inv_euler_rot = np.linalg.inv(euler_rot)
         xr, yr, zr = np.dot(euler_rot, (x, y, z))
-        r0 = TPCorr.r0
-        x = r0 * yr / xr
-        y = r0 * zr / xr
+        x = yr / xr
+        y = zr / xr
 
         xv, yv = convex_hull(x, y)
 
         if len(xv) == 0:
             # no points
-            raise RuntimeError("Unexpected error: Contact sofware developer")
+            raise RuntimeError("Unexpected error: Contact software developer")
 
         elif len(xv) == 1:
             # one point. build a small box around it:
@@ -1232,10 +1257,10 @@ class RefCatalog(object):
 
         # "unrotate" cartezian coordinates back to their original
         # ra_ref and dec_ref "positions":
-        xt = np.full_like(xv, r0)
+        xt = np.ones_like(xv)
         xcr, ycr, zcr = np.dot(inv_euler_rot, (xt, xv, yv))
         # convert cartesian to spherical coordinates:
-        ra, dec = TPCorr.cartesian2spherical(xcr, ycr, zcr)
+        ra, dec = cartesian2spherical(xcr, ycr, zcr)
 
         # TODO: for strange reasons, occasionally ra[0] != ra[-1] and/or
         #       dec[0] != dec[-1] (even though we close the polygon in the
@@ -1270,9 +1295,15 @@ class RefCatalog(object):
         cat = catalog.copy()
         if self._catalog is None:
             self._catalog = cat
+            if 'id' not in self._catalog.colnames:
+                self._catalog['id'] = np.arange(1, len(self._catalog) + 1)
         else:
             self._catalog = table.vstack([self.catalog, cat],
                                          join_type='outer')
+            # overwrite source ID since when expanding the catalog,
+            # there could be duplicates in source ID:
+            self._catalog['id'] = np.arange(1, len(self._catalog) + 1)
+
         self.calc_bounding_polygon()
 
     def calc_tanp_xy(self, tanplane_wcs):
